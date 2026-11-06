@@ -1,0 +1,49 @@
+# Game profile: started as the survey's provisional profile, its memory split, region and present keys measured on the Mac host and the Xiaomi Pad 5
+# South Park™: The Fractured But Whole™, SDK 3, survey <NSP folder>/01008F2005154000_survey/survey.md
+
+# ---- Identity ----
+title_id	01008F2005154000
+program_id	01008F2005154000
+
+# ---- App ----
+name	South Park™: The Fractured But Whole™
+ipa	SouthParkTheFracturedButWhole.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v0	1.0	main=a98c092ab06c72a557a4d2a4d2620457	subsdk0=6c8a6b30bd5e6ca1206e8b1cdcc93bf7	sdk=8bb65519bc6399ab432e0ba7cdb16e2b
+package	v0
+shader_versions	v0
+
+# ---- Files ----
+# every module main imports from
+modules	main subsdk0 sdk
+romfs_marker	camel/sdf/nx/data/sdf-A-0130.sdfdata
+zip_store	.dds:.sdfdata:.sdftoc:.txt:.metallib
+
+# ---- Memory ----
+# the NPDM declares 16 MB of system resource (virtual address memory) and main never sets a heap: a 5 GB block with a 4.375 GB alias region, where the game maps its memory itself
+mem_reserve	0x500000000
+mem_alias	0x400000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+# the NPDM declares 16 MB of system resource
+sys_resource	0x1000000
+
+# ---- Shader split ----
+shader_groups	/camel/=camel /shaders/=shaders
+shader_note	South Park™: The Fractured But Whole™ shaders
+
+# ---- Address region check ----
+# the game calls nvnDeviceSetDepthMode with near = 0 in the check boot: the pipeline bases made before it runs are made for that mode
+depth_mode	zero
+
+# address regions: 2026-11-05, in its first 15 s in nnMain the game's regions reach alias +13.88 GB, past the profile's 4.38 GB alias region, the iPhone layout: the request returning to main+0x17f26bc takes 12.00 GB through nn::os::AllocateAddressRegion: a smaller one works only if its allocator places nothing by fixed offsets (docs/reference/memory.md, Virtual address memory and the alias region) (rewrite faeec93b3e06)
+game_args	-SwitchVirtualAddressSpaceSize=4064
+present_interval	display
+
+# ---- Android ----
+# its vertex shaders fetch positions and transforms from texture buffers through 1D integer fetches (shader_vk.py)
+android_fetch1d_tbuf	on
+# most of its shaders are in its .mcache files; the others, the full-screen blit among them, its own GLSLC compiles at run time: the first run is black until a second port with --install
+android_glslc_capture	on

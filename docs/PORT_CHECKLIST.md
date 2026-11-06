@@ -81,6 +81,7 @@ Left out because they have an official Android release: Unpacking (ported here a
 - [ ] SHIN MEGAMI TENSEI V: Vengeance · `010069C01AB82000` · upstream profile · 60 fps with 1.0.3
 - [ ] Silver Pines · `0100D5B026844000` · upstream profile
 - [x] South Park™: The Stick Of Truth™ · `010043600B6A6000` · needs a Vulkan 1.3 driver or imageless framebuffers with render pass 2 (Turnip packed on the Adreno 640)
+- [x] South Park™: The Fractured But Whole™ · `01008F2005154000` · experimental · needs a Vulkan 1.3 driver or imageless framebuffers with render pass 2 (Turnip packed on the Adreno 640) · shaders compiled at run time: the first run is black, port again with `--install`
 - [ ] SteamWorld Heist II · `010089C01E9CA000` · upstream profile
 - [ ] STEINS;GATE RE:BOOT · `01008BC024FDE000` · profile here
 - [ ] Super Mario 3D World + Bowser's Fury · `010028600EBDA000` · profile here

@@ -408,7 +408,11 @@ class Port:
             try: Adb(self.tools['adb'], self.o.device or self.cfg.get('device'), log=say).pick()
             except (AdbError, KeyError) as e: raise BuildError(f"{self.app_name}'s shaders are in Oodle-compressed archives ({why}): the port decodes them with the game's own decoder on "
                                                                f'the Android device, so connect it (adb) and port again ({e})') from e
-        for k in ('glslc_capture', 'ue_legacy') + (() if self.ue_why else ('ue_decode',)) + (() if self.oodle_why else ('oodle_packs',)):
+        # A shader the game compiles at run time is in no game file. With android_glslc_capture on in its profile (brought up and checked that way), the app saves each one its bundle lacks
+        # (gfx_vk_shader.c vk_shader_missing) and the next port with --install translates it (pull_captures): no Mac host, but those draws are missing until then.
+        glslc_ok = src['glslc_capture'][0] and self.g.get('android_glslc_capture', 'off') == 'on'
+        if glslc_ok: say(f"{self.app_name}: {src['glslc_capture'][1]}: shaders the bundle lacks are saved on the device and join the bundle at the next port with --install")
+        for k in (() if glslc_ok else ('glslc_capture',)) + ('ue_legacy',) + (() if self.ue_why else ('ue_decode',)) + (() if self.oodle_why else ('oodle_packs',)):
             if src[k][0]: raise BuildError(f'{self.app_name} needs a step that boots the game in the Mac host ({src[k][1]}), which the Android port cannot run yet')
 
     # ---- the game's own Oodle decoder on the device, for the shader split (Pokémon Legends: Arceus's GFPAKs, Pokémon Legends: Z-A's Trinity packs) ----

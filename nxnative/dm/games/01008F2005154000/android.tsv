@@ -1,0 +1,16 @@
+# South Park: The Fractured But Whole on Android (keys in docs/ARCHITECTURE.md "Game profiles on Android")
+# Ubisoft's own engine on NVN, SDK 3.5.1, base game 1.0. Most shaders come from its .mcache files; the others, the full-screen blit among them, its GLSLC compiles
+# at run time and no game file holds, so the first run is black (0 draws) while the app saves them: port again with --install, then again as new scenes save more.
+# On the Xiaomi Pad 5 (21051182G, Snapdragon 860 / Adreno 640, Android 13, Turnip 26.0.0 packed with --vulkan-driver) on 2026-11-06, played by hand: logos, opening,
+# the first combat with its grid. 27-28 fps in that combat (~2,450 draws), 30 in lighter scenes. From a clean folder, the second port brought the picture back.
+# env: the replay on the fastest core; the game's 19 submissions a frame replayed into fewer, with passes of 64 draws: frame p50 from 60-68 ms to 36-38 ms (GPU 38 to 29 ms).
+# Known gaps: memory. The game takes about 4 GB of this tablet's 5.6 GB and goes to swap: one run fell to about 90 ms a frame after about 25 minutes, the cause not settled
+# (a 12-minute run did not fall). Not tested: past the first combats, a controller, a save export.
+status	experimental
+tested	v0 Xiaomi Pad 5 21051182G (Snapdragon 860, Adreno 640, Android 13)
+orientation	landscape
+env	DM_NVN_ASYNC=1
+env	DM_PIN_REPLAY=prime
+env	DM_NVN_CHAIN=64
+env	DM_VK_PASS_SPLIT=64
+env	DM_VK_PASS_SPLIT_DEPTH=1
