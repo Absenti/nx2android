@@ -43,7 +43,7 @@
 #   With an update: give RomFS and main as comma-separated lists (base game first, e.g. data/v0/RomFS,data/v327680/RomFS); the output is the union of both versions (see main())
 #   Unity type trees need Unity's common string table, which is taken from the first main
 # Pair table: (vertex key, pixel key) of every BNSH variation (every Unity program); dmsh_build uses it to give vertex shaders the outputs their pixel shaders read but they do not write (see dmsh_build.py vs_pad)
-import collections, concurrent.futures as cf, hashlib, json, os, re, struct, subprocess, sys
+import glob, collections, concurrent.futures as cf, hashlib, json, os, re, struct, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games')); import game as _game
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import uepak
 GAME = _game.load()   # the current game profile (DM_GAME, required): source group rules and the table header note
@@ -52,6 +52,7 @@ GROUPS, NOTE = GAME.pairs('shader_groups'), GAME.get('shader_note')
 # hle_glslc.c), the shader code archives of Unreal paks once decoded on the Mac (uepak.py, DM_OODLE_JOB, hle_oodle.c); the NSP script decides from the files which of the last two to make
 
 CTL_MAGIC, GFX_MAGIC, CS_MAGIC = bytes.fromhex('34127698'), bytes.fromhex('78563412'), bytes.fromhex('79563412')
+MCACHE = bytes.fromhex('d400cdab')   # camel's ShaderCache record (South Park: The Fractured But Whole)
 STAGES = ['vs', 'hs', 'ds', 'gs', 'ps', 'cs']
 SPH_STAGE = {1: 'vs', 2: 'hs', 3: 'ds', 4: 'gs', 5: 'ps'}
 def sph_stage(code):
@@ -1351,6 +1352,44 @@ def var_pairs(found):
         if '#var' in where: var[where][st] = skey(ctl, code)
     return {(v['vs'], v['ps']) for v in var.values() if 'vs' in v and 'ps' in v}
 
+def mcache_shaders(path, label, found):
+    """Camel's ShaderCache records (South Park™: The Fractured But Whole™). A `.mcache` (magic 0xd400cdab) mixes material
+    descriptors in with control sections that have their code area right after them and no GLSLC output header around
+    them, so the magic scan (glslc_shaders) never sees those programs: the split found 623 of the 638 the game asked for
+    and the screen stayed black, while the host's dump of the missing 15 (DM_NVN_SHDUMP) sits verbatim in these files.
+    At each control magic: the control's own length, the code area's length at control +0x704 (the field check compares),
+    and the same triple check as everywhere else. The key is the one the host uses, control + code."""
+    with open(path, 'rb') as f: d = f.read()
+    for m in re.finditer(re.escape(CTL_MAGIC), d):
+        h = m.start()
+        if h + 0x730 > len(d): break
+        n = ctl_len(d[h:h + 0x800])
+        kn = struct.unpack_from('<I', d, h + 0x704)[0]
+        if n < 0x24 or not 0 < kn or h + n + kn > len(d): continue
+        ctl, code = d[h:h + n], d[h + n:h + n + kn]
+        st = glslc_stage(ctl, code)
+        if not st or check(f'{label} mcache@{h:#x}', st, ctl, code): continue
+        found.append((f'{label}#mcache@{h:#x}', st, ctl, code))
+
+
+def shdump_shaders(dirpath, label, found):
+    """Programs the host dumped because the shader map did not have them (DM_NVN_SHDUMP=directory): one `<host key>.ctl` and
+    `<host key>.code` per program, holding the control section and code area as the game passed them at SetShaders, so skey()
+    gives exactly the key the host looks up (the same shape as a GLSLC capture, DM_GLSLC_CAPTURE).
+    South Park™: The Fractured But Whole™ needs this: its 15 remaining programs live only in its RomFS's
+    /camel/ShaderCache/nx/*.mcache files, whose stored control section differs from the runtime one in 18 bytes (GLSLC's
+    compile information and a hash the game recomputes), so their keys cannot be recomputed from the file (mcache_shaders)."""
+    for ctlp in sorted(glob.glob(os.path.join(dirpath, '*.ctl'))):
+        key = os.path.basename(ctlp)[:-4]
+        codep = ctlp[:-4] + '.code'
+        if not os.path.isfile(codep): continue
+        try: ctl, code = open(ctlp, 'rb').read(), open(codep, 'rb').read()
+        except OSError: continue
+        st = glslc_stage(ctl, code)
+        if not st or check(f'{label}/{key}', st, ctl, code): continue
+        found.append((f'{label}/{key}#shdump', st, ctl, code))
+
+
 def scan_file(args):
     """→ (relative path, {key: …}, pairs, extra); extra = this file's Unity type trees, or 'defer' (no type tree, scanned again in the second pass)"""
     path, rel = args[:2]
@@ -1360,6 +1399,9 @@ def scan_file(args):
     found = []; trees = {}
     if head[:4] == NLG_DICT:
         nlg_shaders(path, '/' + rel, found)
+        return rel, uniq_keys(found), var_pairs(found), trees
+    if head[:4] == MCACHE:   # camel's ShaderCache: a control section with its code area right after it, no GLSLC output header around them (mcache_shaders)
+        mcache_shaders(path, '/' + rel, found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if head[:8] in (IDRK, PDRK):
         idrk_shaders(path, '/' + rel, found)
@@ -1458,6 +1500,9 @@ def main():
         if not names and img.count(b'#version ') and 'glslcCompile' in main_imports(img) and glslc_module(os.path.dirname(os.path.abspath(mainnso))):
             print(f'[RED] main holds GLSL sources and imports glslcCompile, but there are no captured GLSLC outputs in {cap}: the shaders the game compiles at run time will have no translation', flush=True)
         for nm in names: found += glslc_shaders(open(os.path.join(cap, nm), 'rb').read(), f'/glslc_capture/{nm}')
+        # Programs the host dumped because the map did not have them (DM_NVN_SHDUMP=directory): their runtime bytes, so their keys are the host's (shdump_shaders)
+        shd = os.environ.get('DM_NVN_SHDUMP_DIR') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'shdump')
+        if os.path.isdir(shd): shdump_shaders(shd, 'shdump', found)
         # Unreal Engine shader code archives decoded on the Mac (uepak.py): <version dir>/ue_shaders, or DM_UE_SHADERS; needed when the RomFS has Unreal paks
         ued = os.environ.get('DM_UE_SHADERS') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'ue_shaders')
         names = sorted(f for f in os.listdir(ued) if f.endswith('.ushaderbytecode')) if os.path.isdir(ued) else []
