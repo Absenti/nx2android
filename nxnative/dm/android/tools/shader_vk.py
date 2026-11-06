@@ -408,6 +408,20 @@ def main():
         print(f'translating {len(again)} vertex shaders again with their integer inputs ...', flush=True)
         ch2 = [again[i::a.jobs] for i in range(a.jobs) if again[i::a.jobs]]
         with cf.ThreadPoolExecutor(len(ch2)) as ex: rs += list(ex.map(xl, ch2))
+    # A texture slot read by 1D integer fetches holds a 1D texture or a texture buffer, which only the bound descriptor tells. With no type answer the translator reads it as wrapped 2D rows
+    # (res "fetch1d"), which the Mac host binds over the buffer (nvn_mtl.m tbuf_as_2d); Vulkan cannot view a buffer as an image, so a texture buffer there read the black fallback and every
+    # vertex fetched through it collapsed (South Park: The Fractured But Whole: an all-black picture with all draws running). android_fetch1d_tbuf on: those slots hold texture buffers in
+    # this game, so they are translated again as texel buffers (gfx_vk_exec.c binds them with vk_tbuf_view). Off by default: a game that binds a real 1D texture there would read zeros.
+    if GAME.get('android_fetch1d_tbuf', 'off') == 'on':
+        redo = []
+        for k in keys:
+            rp = os.path.join(w, k + '.res.json')
+            f1 = json.load(open(rp)).get('fetch1d') if os.path.exists(rp) else None
+            if f1: jobs[k]['tex'] = {**jobs[k].get('tex', {}), **{str(sl): 'buffer' for sl in f1}}; redo.append(k)
+        print(f'android_fetch1d_tbuf: {len(redo)} shaders read texture buffers by 1D fetches, translated again as texel buffers', flush=True)
+        if redo:
+            rc = [redo[i::a.jobs] for i in range(a.jobs) if redo[i::a.jobs]]
+            with cf.ThreadPoolExecutor(len(rc)) as ex: rs += list(ex.map(xl, rc))
     errs = collections.Counter()
     for r in rs:
         for ln in r.stderr.splitlines():
