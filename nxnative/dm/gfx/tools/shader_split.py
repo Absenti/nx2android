@@ -43,7 +43,7 @@
 #   With an update: give RomFS and main as comma-separated lists (base game first, e.g. data/v0/RomFS,data/v327680/RomFS); the output is the union of both versions (see main())
 #   Unity type trees need Unity's common string table, which is taken from the first main
 # Pair table: (vertex key, pixel key) of every BNSH variation (every Unity program); dmsh_build uses it to give vertex shaders the outputs their pixel shaders read but they do not write (see dmsh_build.py vs_pad)
-import glob, collections, concurrent.futures as cf, hashlib, json, os, re, struct, subprocess, sys
+import collections, concurrent.futures as cf, hashlib, json, os, re, struct, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games')); import game as _game
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import uepak
 GAME = _game.load()   # the current game profile (DM_GAME, required): source group rules and the table header note
@@ -1372,24 +1372,6 @@ def mcache_shaders(path, label, found):
         found.append((f'{label}#mcache@{h:#x}', st, ctl, code))
 
 
-def shdump_shaders(dirpath, label, found):
-    """Programs the host dumped because the shader map did not have them (DM_NVN_SHDUMP=directory): one `<host key>.ctl` and
-    `<host key>.code` per program, holding the control section and code area as the game passed them at SetShaders, so skey()
-    gives exactly the key the host looks up (the same shape as a GLSLC capture, DM_GLSLC_CAPTURE).
-    South Park™: The Fractured But Whole™ needs this: its 15 remaining programs live only in its RomFS's
-    /camel/ShaderCache/nx/*.mcache files, whose stored control section differs from the runtime one in 18 bytes (GLSLC's
-    compile information and a hash the game recomputes), so their keys cannot be recomputed from the file (mcache_shaders)."""
-    for ctlp in sorted(glob.glob(os.path.join(dirpath, '*.ctl'))):
-        key = os.path.basename(ctlp)[:-4]
-        codep = ctlp[:-4] + '.code'
-        if not os.path.isfile(codep): continue
-        try: ctl, code = open(ctlp, 'rb').read(), open(codep, 'rb').read()
-        except OSError: continue
-        st = glslc_stage(ctl, code)
-        if not st or check(f'{label}/{key}', st, ctl, code): continue
-        found.append((f'{label}/{key}#shdump', st, ctl, code))
-
-
 def scan_file(args):
     """→ (relative path, {key: …}, pairs, extra); extra = this file's Unity type trees, or 'defer' (no type tree, scanned again in the second pass)"""
     path, rel = args[:2]
@@ -1500,9 +1482,6 @@ def main():
         if not names and img.count(b'#version ') and 'glslcCompile' in main_imports(img) and glslc_module(os.path.dirname(os.path.abspath(mainnso))):
             print(f'[RED] main holds GLSL sources and imports glslcCompile, but there are no captured GLSLC outputs in {cap}: the shaders the game compiles at run time will have no translation', flush=True)
         for nm in names: found += glslc_shaders(open(os.path.join(cap, nm), 'rb').read(), f'/glslc_capture/{nm}')
-        # Programs the host dumped because the map did not have them (DM_NVN_SHDUMP=directory): their runtime bytes, so their keys are the host's (shdump_shaders)
-        shd = os.environ.get('DM_NVN_SHDUMP_DIR') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'shdump')
-        if os.path.isdir(shd): shdump_shaders(shd, 'shdump', found)
         # Unreal Engine shader code archives decoded on the Mac (uepak.py): <version dir>/ue_shaders, or DM_UE_SHADERS; needed when the RomFS has Unreal paks
         ued = os.environ.get('DM_UE_SHADERS') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'ue_shaders')
         names = sorted(f for f in os.listdir(ued) if f.endswith('.ushaderbytecode')) if os.path.isdir(ued) else []
