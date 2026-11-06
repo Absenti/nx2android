@@ -1221,11 +1221,44 @@ static uint64_t g_job_enq, g_job_done, g_job_fence[JOB_RING];   // jobs queued a
 static pthread_mutex_t g_job_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_job_cv = PTHREAD_COND_INITIALIZER, g_jobdone_cv = PTHREAD_COND_INITIALIZER;
 static int nvn_async(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_ASYNC"); on = e && atoi(e); } return on; }
 static void submit_now(NVNqueue *q, int n, const NVNcommandHandle *h);
+// DM_NVN_CHAIN=n (start-up, with DM_NVN_ASYNC=1; off by default): submissions waiting in the queue are replayed into one Vulkan submission, up to n of them. A game that flushes its
+// commands in small pieces (South Park: The Fractured But Whole: 19 submissions a frame, about 180 draws each, on the same targets) otherwise ends the render pass at each, and on a tiled GPU
+// every pass stores and reloads the whole target, besides one vkQueueSubmit each. The order does not change and no fence signals early: a sync names a job, and a job counts as replayed, with
+// its commit fence, only once the commit that holds it is made; a game waiting on one pushes no more, so the chain ends. Needs zero-copy pools: a copied pool is synced at the commit's start.
+static int nvn_chain(void) { static int n = -1; if (n < 0) { const char *e = getenv("DM_NVN_CHAIN"); n = e ? atoi(e) : 0; if (n > 256) n = 256; } return n; }
+static void replay_chain(void) {
+    static nvn_job kept[2][256]; static int nkept[2], side; static uint64_t commits, jobs; int k = 0, cur = side; uint64_t ts = now_ns();
+    gfx_enter(); pthread_mutex_lock(&g_sub_mu); uint64_t t0 = now_ns();
+    mtl_sub_begin(); nvn_ft_poll();
+    for (;;) {
+        pthread_mutex_lock(&g_job_mu); nvn_job c = g_jobs[k]; pthread_mutex_unlock(&g_job_mu);
+        __atomic_store_n(&g_replaying, g_job_done + (uint64_t)k + 1, __ATOMIC_RELAXED);
+        SEQ("submit %d handles (chain %d)", c.n, k);
+        mtl_sub_index(c.h, c.n);
+        for (int i = 0; i < c.n; i++) { mtl_exec_rest(c.h + i + 1, c.n - i - 1); mtl_exec((const uint8_t *)(uintptr_t)c.h[i]); }
+        kept[cur][k++] = c; if (k == 1) g_tl_enq = c.t_enq;
+        pthread_mutex_lock(&g_job_mu); int more = k < nvn_chain() && k < g_njob && g_jobs[k].kind == JOB_SUBMIT; pthread_mutex_unlock(&g_job_mu);
+        if (!more) break;
+    }
+    mtl_exec_rest(NULL, 0); mtl_sub_commit();
+    __atomic_store_n(&g_replaying, 0, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&g_sub_mu); atomic_fetch_add(&g_nvn_ns, now_ns() - t0); gfx_leave();
+    side = !side;   // the copies (rec_copy) go one commit later, as a single submission's do
+    for (int i = 0; i < nkept[side]; i++) { nvn_job *o = &kept[side][i]; for (int h = 0; h < o->n; h++) free((void *)(uintptr_t)o->h[h]); free(o->h); }
+    nkept[side] = 0; nkept[cur] = k;
+    g_tl_start = ts; g_tl_end = now_ns();
+    commits++; jobs += (uint64_t)k; if (commits % 600 == 0) { LOG("[nvn] DM_NVN_CHAIN: %.1f submissions per commit (last 600)", jobs / 600.0); jobs = 0; }
+    pthread_mutex_lock(&g_job_mu);
+    uint64_t fence = mtl_last_fence(); g_njob -= k; memmove(g_jobs, g_jobs + k, sizeof *g_jobs * (size_t)g_njob);
+    for (int i = 0; i < k; i++) { g_job_done++; g_job_fence[g_job_done % JOB_RING] = fence; }
+    pthread_cond_broadcast(&g_jobdone_cv); pthread_mutex_unlock(&g_job_mu);
+}
 static void *replay_main(void *arg) {
     (void)arg; pthread_setname_np(pthread_self(), "nvn replay"); dm_perf_replay_thread();
     for (;;) {
         pthread_mutex_lock(&g_job_mu); while (!g_njob) pthread_cond_wait(&g_job_cv, &g_job_mu);
         nvn_job j = g_jobs[0]; pthread_mutex_unlock(&g_job_mu);
+        if (j.kind == JOB_SUBMIT && nvn_chain() > 1) { replay_chain(); continue; }
         if (j.kind == JOB_SUBMIT) { uint64_t ts = now_ns(); __atomic_store_n(&g_replaying, g_job_done + 1, __ATOMIC_RELAXED); submit_now(j.q, j.n, (const NVNcommandHandle *)j.h); __atomic_store_n(&g_replaying, 0, __ATOMIC_RELAXED);
             static nvn_job prev; if (prev.h) { for (int i = 0; i < prev.n; i++) free((void *)(uintptr_t)prev.h[i]); free(prev.h); }   // the copies (rec_copy) go one submission later
             prev = j; g_tl_enq = j.t_enq; g_tl_start = ts; g_tl_end = now_ns(); }
